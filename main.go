@@ -29,7 +29,7 @@ don't use any markdown or other kind of forrmating, or newlines. give the text a
 )
 
 var (
-	model  = "gemma3:27b"
+	model  = "qwen2.5vl:3b"
 	imgExt = []string{".heif", ".heic", ".jpg", ".jpeg", ".tif", ".png"}
 )
 
@@ -99,7 +99,7 @@ func main() {
 
 		resDesc, err := m.Chat(ctx, prompt, gollama.PromptImage{Filename: image.PngPath}, gollama.StructToStructuredFormat(LLMAnswer{}))
 		if err != nil {
-			fmt.Println(err)
+			fmt.Printf("Error chat, err: %s", err.Error())
 			return
 		}
 
