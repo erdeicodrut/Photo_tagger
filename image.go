@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -48,6 +52,67 @@ func (image *Image) ConvertToPNG() error {
 func (image *Image) IsSupportedByOCR() bool {
 	ocrSupported := []string{".jpg", ".jpeg", ".tif", ".png"}
 	return slices.Contains(ocrSupported, image.Extension)
+}
+
+func (image *Image) extractText() string {
+	type easyocrOutput struct {
+		Text string `json:"text"`
+	}
+
+	var imagePath string
+	if image.IsSupportedByOCR() {
+		imagePath = image.Path + image.Filename
+	} else {
+		imagePath = image.PngPath
+	}
+
+	output, err := exec.Command(
+		"easyocr", "-l", "en", "-f", imagePath,
+		"--paragraph", "True",
+		"--gpu", "True",
+		"--output_format", "json",
+	).Output()
+	if err != nil {
+		return ""
+	}
+	if len(output) == 0 {
+		return ""
+	}
+	var outputs []string
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if len(line) == 0 {
+			continue
+		}
+		var item easyocrOutput
+		_ = json.Unmarshal([]byte(line), &item)
+		outputs = append(outputs, item.Text)
+	}
+	if err := scanner.Err(); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.ReplaceAll(strings.Join(outputs, " "), "\n", " "))
+}
+
+func (image *Image) addDescription(description string) error {
+	_, err := exec.Command(
+		"exiftool", image.Path+image.Filename,
+		fmt.Sprintf("-ImageDescription=%s", description),
+		"-P",
+		"-preserve",
+		"-overwrite_original",
+	).Output()
+
+	return err
+}
+
+func (image *Image) hasDescription() bool {
+	output, _ := exec.Command(
+		"exiftool", image.Path+image.Filename,
+	).Output()
+
+	return strings.Contains(string(output), "Image Description")
 }
 
 func loadImage(filePath string) (image.Image, error) {

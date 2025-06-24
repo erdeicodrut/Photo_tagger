@@ -1,13 +1,10 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -77,6 +74,12 @@ func main() {
 	}
 
 	for _, image := range images {
+
+		if image.hasDescription() {
+			fmt.Printf("Image %s already has description\n", image.Filename)
+			continue
+		}
+
 		fmt.Println("Processing image:", image.Filename)
 
 		err := image.ConvertToPNG()
@@ -85,62 +88,34 @@ func main() {
 			return
 		}
 
-		var resText string
-		if image.IsSupportedByOCR() {
-			resText = extractText(image.Path + image.Filename)
-		} else {
-			resText = extractText(image.PngPath)
-		}
+		resText := image.extractText()
+
 		fmt.Printf("Text for %s: %s\n", image.Filename, resText)
 
 		type LLMAnswer struct {
 			Description string `required:"true"`
 		}
 
-		resDesc, err := m.Chat(ctx, prompt, gollama.PromptImage{Filename: image.PngPath}, gollama.StructToStructuredFormat(LLMAnswer{}))
+		llmResponse, err := m.Chat(ctx, prompt, gollama.PromptImage{Filename: image.PngPath}, gollama.StructToStructuredFormat(LLMAnswer{}))
 		if err != nil {
 			fmt.Printf("Error chat, err: %s", err.Error())
 			return
 		}
 
 		var item LLMAnswer
-		_ = json.Unmarshal([]byte(resDesc.Content), &item)
+		_ = json.Unmarshal([]byte(llmResponse.Content), &item)
 
 		fmt.Println("Description:", item.Description)
 
-	}
-}
+		resDescription := item.Description
 
-func extractText(imagePath string) string {
-	type easyocrOutput struct {
-		Text string `json:"text"`
-	}
+		desc := resDescription + "\n" + resText
 
-	output, err := exec.Command(
-		"easyocr", "-l", "en", "-f", imagePath,
-		"--paragraph", "True",
-		"--gpu", "True",
-		"--output_format", "json",
-	).Output()
-	if err != nil {
-		return ""
-	}
-	if len(output) == 0 {
-		return ""
-	}
-	var outputs []string
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if len(line) == 0 {
-			continue
+		err = image.addDescription(desc)
+		if err != nil {
+			fmt.Printf("Error adding description: %s", err.Error())
+			return
 		}
-		var item easyocrOutput
-		_ = json.Unmarshal([]byte(line), &item)
-		outputs = append(outputs, item.Text)
+
 	}
-	if err := scanner.Err(); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(strings.ReplaceAll(strings.Join(outputs, " "), "\n", " "))
 }
