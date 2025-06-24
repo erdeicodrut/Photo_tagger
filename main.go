@@ -30,7 +30,7 @@ don't use any markdown or other kind of forrmating, or newlines. give the text a
 
 var (
 	model  = "qwen2.5vl:3b"
-	imgExt = []string{".heif", ".heic", ".jpg", ".jpeg", ".tif", ".png"}
+	imgExt = []string{".hif", ".heif", ".heic", ".jpg", ".jpeg", ".tif", ".png"}
 )
 
 func main() {

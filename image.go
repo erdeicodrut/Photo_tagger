@@ -34,7 +34,7 @@ func (image *Image) ConvertToPNG() error {
 	}
 
 	// Resize so long side = 1000px, maintains aspect ratio, only shrinks (doesn't upscale)
-	img = resizeToLongEdge(img, 1000, false) // false = don't upscale
+	img = resizeToLongEdge(img, 1000, false)
 
 	err = savePNG(img, outputPath)
 	if err != nil {
@@ -54,7 +54,7 @@ func loadImage(filePath string) (image.Image, error) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 
 	switch ext {
-	case ".heif", ".heic":
+	case ".hif", ".heif", ".heic":
 		return loadHEIF(filePath)
 	case ".jpg", ".jpeg":
 		return loadJPEG(filePath)
@@ -74,7 +74,6 @@ func loadImage(filePath string) (image.Image, error) {
 }
 
 func loadHEIF(filePath string) (image.Image, error) {
-	// Use MaestroError's go-libheif which returns image.Image directly
 	img, err := libheif.ReturnImageFromHeif(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("HEIF decode error: %v", err)
