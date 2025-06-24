@@ -6,10 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
+	"sync"
 	"time"
 
 	"github.com/jonathanhecl/gollama"
@@ -88,78 +87,84 @@ func processDir(path string) {
 			}
 		}
 	}
+	processImagesParallel(images)
+}
+
+func processImagesParallel(images []Image) {
+	jobs := make(chan Image, len(images))
+	var wg sync.WaitGroup
+	var errMutex sync.Mutex
+
+	writeError := func(format string, args ...interface{}) {
+		errMutex.Lock()
+		defer errMutex.Unlock()
+		fmt.Fprintf(errFile, format, args...)
+	}
+
+	for i := 0; i < args.Workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			for image := range jobs {
+				processImage(image, writeError)
+			}
+		}()
+	}
 
 	for _, image := range images {
-
-		if !args.OverriteDescriptions && image.hasDescription() {
-			fmt.Printf("Image %s already has description. Skipping...\n", image.GetFullPath())
-			continue
-		}
-
-		fmt.Println("Processing image:", image.GetFullPath())
-
-		err := image.ConvertToPNG()
-		if err != nil {
-			fmt.Fprintf(errFile, "Error convertToPNG, err: %s\n", err.Error())
-			return
-		}
-
-		var resText string
-		if !args.SkipOCR {
-			resText, err := image.extractText()
-			if err != nil {
-				fmt.Fprintf(errFile, "Couldn't extract text for %s, err: %s\n", image.GetFullPath(), err.Error())
-			}
-
-			fmt.Printf("Text for %s: %s\n", image.GetFullPath(), resText)
-		}
-
-		type LLMAnswer struct {
-			Description string `required:"true"`
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(args.Timeout)*time.Second)
-		defer cancel()
-
-		llmResponse, err := m.Chat(ctx, prompt, gollama.PromptImage{Filename: image.PngPath}, gollama.StructToStructuredFormat(LLMAnswer{}))
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				fmt.Fprintf(errFile, "Chat timeout after %d seconds for image: %s\n", args.Timeout, image.GetFullPath())
-			} else {
-				fmt.Fprintf(errFile, "Error chat for %s, err: %s\n", image.GetFullPath(), err.Error())
-			}
-
-			continue
-		}
-
-		var item LLMAnswer
-		_ = json.Unmarshal([]byte(llmResponse.Content), &item)
-
-		fmt.Println("Description:", item.Description)
-
-		resDescription := item.Description
-
-		desc := resDescription + "\n" + resText
-
-		err = image.addDescription(desc)
-		if err != nil {
-			fmt.Fprintf(errFile, "Error adding description: %s\n", err.Error())
-			return
-		}
-
+		jobs <- image
 	}
+	close(jobs)
+
+	wg.Wait()
 }
 
-func handleTermination() {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+func processImage(image Image, writeError func(string, ...interface{})) {
+	if !args.OverriteDescriptions && image.hasDescription() {
+		fmt.Printf("Image %s already has description. Skipping...\n", image.GetFullPath())
+		return
+	}
 
-	<-c
-	fmt.Println("\nReceived interrupt signal, cleaning up...")
-	cleanup()
-	os.Exit(0)
-}
+	fmt.Println("Processing image:", image.GetFullPath())
 
-func cleanup() {
-	os.RemoveAll("./temp")
+	err := image.ConvertToPNG()
+	if err != nil {
+		writeError("Error convertToPNG, err: %s\n", err.Error())
+		return
+	}
+
+	var resText string
+	if !args.SkipOCR {
+		resText, err = image.extractText()
+		if err != nil {
+			writeError("Couldn't extract text for %s, err: %s\n", image.GetFullPath(), err.Error())
+		}
+		fmt.Printf("Text for %s: %s\n", image.GetFullPath(), resText)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(args.Timeout)*time.Second)
+	defer cancel()
+
+	llmResponse, err := m.Chat(ctx, prompt, gollama.PromptImage{Filename: image.PngPath}, gollama.StructToStructuredFormat(LLMAnswer{}))
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			writeError("Chat timeout after %d seconds for image: %s\n", args.Timeout, image.GetFullPath())
+		} else {
+			writeError("Error chat for %s, err: %s\n", image.GetFullPath(), err.Error())
+		}
+		return
+	}
+
+	var item LLMAnswer
+	_ = json.Unmarshal([]byte(llmResponse.Content), &item)
+	fmt.Println("Description:", item.Description)
+
+	resDescription := item.Description
+	desc := resDescription + "\n" + resText
+	err = image.addDescription(desc)
+	if err != nil {
+		writeError("Error adding description: %s\n", err.Error())
+		return
+	}
 }
