@@ -121,12 +121,16 @@ func processImagesParallel(images []Image) {
 }
 
 func processImage(image Image, writeError func(string, ...interface{})) {
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start)
+		fmt.Printf("processImage completed in %v for %s\n", duration, image.GetFullPath())
+	}()
+
 	if !args.OverriteDescriptions && image.hasDescription() {
 		fmt.Printf("Image %s already has description. Skipping...\n", image.GetFullPath())
 		return
 	}
-
-	fmt.Println("Processing image:", image.GetFullPath())
 
 	err := image.ConvertToPNG()
 	if err != nil {
@@ -140,7 +144,7 @@ func processImage(image Image, writeError func(string, ...interface{})) {
 		if err != nil {
 			writeError("Couldn't extract text for %s, err: %s\n", image.GetFullPath(), err.Error())
 		}
-		fmt.Printf("Text for %s: %s\n", image.GetFullPath(), resText)
+		// fmt.Printf("Text for %s: %s\n", image.GetFullPath(), resText)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(args.Timeout)*time.Second)
@@ -158,7 +162,7 @@ func processImage(image Image, writeError func(string, ...interface{})) {
 
 	var item LLMAnswer
 	_ = json.Unmarshal([]byte(llmResponse.Content), &item)
-	fmt.Println("Description:", item.Description)
+	// fmt.Println("Description:", item.Description)
 
 	resDescription := item.Description
 	desc := resDescription + "\n" + resText
