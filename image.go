@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -13,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/MaestroError/go-libheif"
 	"golang.org/x/image/draw"
@@ -26,13 +29,21 @@ type Image struct {
 	Extension string
 }
 
+func (image *Image) GetFullPath() string {
+	return filepath.Join(image.Path, image.Filename)
+}
+
+func (image *Image) IsOCRSupported() bool {
+	return slices.Contains(ocrSupported, image.Extension)
+}
+
 func (image *Image) ConvertToPNG() error {
 	_ = os.MkdirAll("./temp", 0o755)
-	filename := filepath.Base(image.Path + image.Filename)
+	filename := filepath.Base(image.GetFullPath())
 	nameWithoutExt := strings.TrimSuffix(filename, filepath.Ext(filename))
 	outputPath := filepath.Join("./temp", nameWithoutExt+".png")
 
-	img, err := loadImage(image.Path + image.Filename)
+	img, err := loadImage(image.GetFullPath())
 	if err != nil {
 		return fmt.Errorf("failed to load image: %v", err)
 	}
@@ -49,34 +60,40 @@ func (image *Image) ConvertToPNG() error {
 	return nil
 }
 
-func (image *Image) IsSupportedByOCR() bool {
-	ocrSupported := []string{".jpg", ".jpeg", ".tif", ".png"}
-	return slices.Contains(ocrSupported, image.Extension)
-}
-
-func (image *Image) extractText() string {
+func (image *Image) extractText() (string, error) {
 	type easyocrOutput struct {
 		Text string `json:"text"`
 	}
 
 	var imagePath string
-	if image.IsSupportedByOCR() {
-		imagePath = image.Path + image.Filename
+	if image.IsOCRSupported() {
+		imagePath = image.GetFullPath()
 	} else {
 		imagePath = image.PngPath
 	}
 
-	output, err := exec.Command(
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(args.Timeout)*time.Second)
+	defer cancel()
+
+	output, err := exec.CommandContext(ctx,
 		"easyocr", "-l", "en", "-f", imagePath,
 		"--paragraph", "True",
 		"--gpu", "True",
 		"--output_format", "json",
 	).Output()
 	if err != nil {
-		return ""
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			return "", fmt.Errorf("OCR timeout after %d seconds for: %s\n", args.Timeout, imagePath)
+		case err.(*exec.ExitError) != nil:
+			return "", fmt.Errorf("OCR command failed for %s: %v\n", imagePath, err)
+		default:
+			return "", fmt.Errorf("OCR error for %s: %v\n", imagePath, err)
+		}
 	}
+
 	if len(output) == 0 {
-		return ""
+		return "", nil
 	}
 	var outputs []string
 	scanner := bufio.NewScanner(bytes.NewReader(output))
@@ -90,9 +107,9 @@ func (image *Image) extractText() string {
 		outputs = append(outputs, item.Text)
 	}
 	if err := scanner.Err(); err != nil {
-		return ""
+		return "", err
 	}
-	return strings.TrimSpace(strings.ReplaceAll(strings.Join(outputs, " "), "\n", " "))
+	return strings.TrimSpace(strings.ReplaceAll(strings.Join(outputs, " "), "\n", " ")), nil
 }
 
 func (image *Image) addDescription(description string) error {
@@ -103,7 +120,6 @@ func (image *Image) addDescription(description string) error {
 		"-preserve",
 		"-overwrite_original",
 	).Output()
-
 	return err
 }
 
@@ -111,13 +127,18 @@ func (image *Image) hasDescription() bool {
 	output, _ := exec.Command(
 		"exiftool", image.Path+image.Filename,
 	).Output()
-
 	return strings.Contains(string(output), "Image Description")
+}
+
+func (image *Image) getExif() []byte {
+	output, _ := exec.Command(
+		"exiftool", image.Path+image.Filename,
+	).Output()
+	return output
 }
 
 func loadImage(filePath string) (image.Image, error) {
 	ext := strings.ToLower(filepath.Ext(filePath))
-
 	switch ext {
 	case ".hif", ".heif", ".heic":
 		return loadHEIF(filePath)
@@ -203,6 +224,5 @@ func savePNG(img image.Image, outputPath string) error {
 		return err
 	}
 	defer file.Close()
-
 	return png.Encode(file, img)
 }

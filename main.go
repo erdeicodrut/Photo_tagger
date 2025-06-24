@@ -3,57 +3,73 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/jonathanhecl/gollama"
-)
-
-const (
-	prompt = `
-Provide a concise description of the image content for search purposes, including:
-   - Main subjects/objects in the image
-   - Setting/location type
-   - Notable activities or scenes
-   - Colors, style, or distinctive features
-   - Don't miss any part of the image like objects and animals
-For both use simple words and no derivations for smaller or larger, instead use a different word for size or other kind of attributes like that. Rembmber we are trying to optimise for search.
-You can also add some simpler synonyms at the end of the description for better serachability.
-don't use any markdown or other kind of forrmating, or newlines. give the text as clear as possible
-	`
+	"github.com/jxskiss/mcli"
 )
 
 var (
-	model  = "qwen2.5vl:3b"
-	imgExt = []string{".hif", ".heif", ".heic", ".jpg", ".jpeg", ".tif", ".png"}
+	ctx     context.Context
+	m       *gollama.Gollama
+	errFile *os.File
+	args    Args
 )
 
 func main() {
-	ctx := context.Background()
-	if len(os.Args) == 3 {
-		model = os.Args[2]
-	}
-	m := gollama.New(model)
+	go handleTermination()
+	defer cleanup()
+
+	mcli.SetOptions(mcli.Options{
+		EnableFlagCompletionForAllCommands: true,
+	})
+
+	_, _ = mcli.Parse(&args)
+	errFile, _ = os.OpenFile(args.GetErrFilePath(), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+	defer errFile.Close()
+
+	ctx = context.Background()
+	m = gollama.New(args.Model)
 	err := m.PullIfMissing(ctx)
 	if err != nil {
-		fmt.Printf("Error getting model, err: %s", err.Error())
+		fmt.Fprintf(errFile, "Error getting model, err: %s\n", err.Error())
 		return
 	}
 
-	path := os.Args[1]
-
-	fmt.Println(path)
+	path := args.DirPath
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		fmt.Printf("Path does not exist, err: %s", err.Error())
+		fmt.Fprintf(errFile, "Path does not exist, err: %s\n", err.Error())
 		return
 	}
 
+	processDir(path)
+}
+
+func processDir(path string) {
+	if !strings.HasSuffix(path, "/") {
+		path += "/"
+	}
+
+	fmt.Println("Processing dir " + path)
 	files, err := os.ReadDir(path)
 	if err != nil {
-		fmt.Printf("Error reading path, err: %s", err.Error())
+		fmt.Fprintf(errFile, "Error reading path, err: %s\n", err.Error())
 		return
+	}
+	if args.IsRecursive {
+		for _, f := range files {
+			if f.IsDir() {
+				dirPath := filepath.Join(path, f.Name())
+				processDir(dirPath)
+			}
+		}
 	}
 
 	images := []Image{}
@@ -75,31 +91,45 @@ func main() {
 
 	for _, image := range images {
 
-		if image.hasDescription() {
-			fmt.Printf("Image %s already has description\n", image.Filename)
+		if !args.OverriteDescriptions && image.hasDescription() {
+			fmt.Printf("Image %s already has description. Skipping...\n", image.GetFullPath())
 			continue
 		}
 
-		fmt.Println("Processing image:", image.Filename)
+		fmt.Println("Processing image:", image.GetFullPath())
 
 		err := image.ConvertToPNG()
 		if err != nil {
-			fmt.Printf("Error convertToPNG, err: %s", err.Error())
+			fmt.Fprintf(errFile, "Error convertToPNG, err: %s\n", err.Error())
 			return
 		}
 
-		resText := image.extractText()
+		var resText string
+		if !args.SkipOCR {
+			resText, err := image.extractText()
+			if err != nil {
+				fmt.Fprintf(errFile, "Couldn't extract text for %s, err: %s\n", image.GetFullPath(), err.Error())
+			}
 
-		fmt.Printf("Text for %s: %s\n", image.Filename, resText)
+			fmt.Printf("Text for %s: %s\n", image.GetFullPath(), resText)
+		}
 
 		type LLMAnswer struct {
 			Description string `required:"true"`
 		}
 
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(args.Timeout)*time.Second)
+		defer cancel()
+
 		llmResponse, err := m.Chat(ctx, prompt, gollama.PromptImage{Filename: image.PngPath}, gollama.StructToStructuredFormat(LLMAnswer{}))
 		if err != nil {
-			fmt.Printf("Error chat, err: %s", err.Error())
-			return
+			if errors.Is(err, context.DeadlineExceeded) {
+				fmt.Fprintf(errFile, "Chat timeout after %d seconds for image: %s\n", args.Timeout, image.GetFullPath())
+			} else {
+				fmt.Fprintf(errFile, "Error chat for %s, err: %s\n", image.GetFullPath(), err.Error())
+			}
+
+			continue
 		}
 
 		var item LLMAnswer
@@ -113,9 +143,23 @@ func main() {
 
 		err = image.addDescription(desc)
 		if err != nil {
-			fmt.Printf("Error adding description: %s", err.Error())
+			fmt.Fprintf(errFile, "Error adding description: %s\n", err.Error())
 			return
 		}
 
 	}
+}
+
+func handleTermination() {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+	<-c
+	fmt.Println("\nReceived interrupt signal, cleaning up...")
+	cleanup()
+	os.Exit(0)
+}
+
+func cleanup() {
+	os.RemoveAll("./temp")
 }
