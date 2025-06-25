@@ -127,7 +127,22 @@ func (image *Image) hasDescription() bool {
 	output, _ := exec.Command(
 		"exiftool", image.Path+image.Filename,
 	).Output()
-	return strings.Contains(string(output), "Image Description")
+	outputLines := strings.Split(string(output), "\n")
+	desc := ""
+
+	for _, l := range outputLines {
+		if strings.Contains(l, "Image Description") {
+			lines := strings.Split(l, ":")
+			if len(lines) < 2 {
+				return false
+			}
+			desc = lines[len(lines)-1]
+		}
+	}
+
+	fmt.Println(desc)
+
+	return len(desc) > 1
 }
 
 func (image *Image) getExif() []byte {

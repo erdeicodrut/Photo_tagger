@@ -99,6 +99,7 @@ func processImagesParallel(images []Image) {
 		errMutex.Lock()
 		defer errMutex.Unlock()
 		fmt.Fprintf(errFile, format, args...)
+		fmt.Fprintf(os.Stderr, format, args...)
 	}
 
 	for i := 0; i < args.Workers; i++ {
