@@ -140,8 +140,6 @@ func (image *Image) hasDescription() bool {
 		}
 	}
 
-	fmt.Println(desc)
-
 	return len(desc) > 1
 }
 
