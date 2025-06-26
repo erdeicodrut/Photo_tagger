@@ -122,16 +122,17 @@ func processImagesParallel(images []Image) {
 }
 
 func processImage(image Image, writeError func(string, ...interface{})) {
-	start := time.Now()
-	defer func() {
-		duration := time.Since(start)
-		fmt.Printf("processImage completed in %v for %s\n", duration, image.GetFullPath())
-	}()
-
 	if !args.OverriteDescriptions && image.hasDescription() {
-		fmt.Printf("Image %s already has description. Skipping...\n", image.GetFullPath())
+		fmt.Printf("Image %s already has description. Skipping...\n", image.Filename)
 		return
 	}
+
+	start := time.Now()
+	fmt.Printf("Started processing %s\n", image.Filename)
+	defer func() {
+		duration := time.Since(start)
+		fmt.Printf("%s took %v ✅ \n",  image.Filename,duration)
+	}()
 
 	err := image.ConvertToPNG()
 	if err != nil {
