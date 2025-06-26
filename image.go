@@ -20,6 +20,9 @@ import (
 	"github.com/MaestroError/go-libheif"
 	"golang.org/x/image/draw"
 	"golang.org/x/image/tiff"
+
+	"github.com/dsoprea/go-exif/v3"
+	exifcommon "github.com/dsoprea/go-exif/v3/common"
 )
 
 type Image struct {
@@ -124,6 +127,42 @@ func (image *Image) addDescription(description string) error {
 }
 
 func (image *Image) hasDescription() bool {
+	rawExif, err := exif.SearchFileAndExtractExif(image.GetFullPath())
+	if err != nil {
+		// Fallback to exiftool implemenation if the main one fails because it works
+		return image.getExifToolDescription()
+	}
+
+	im, err := exifcommon.NewIfdMappingWithStandard()
+	if err != nil {
+		return false
+	}
+
+	ti := exif.NewTagIndex()
+	_, index, err := exif.Collect(im, ti, rawExif)
+	if err != nil {
+		return false
+	}
+
+	rootIfd := index.RootIfd
+	results, err := rootIfd.FindTagWithId(0x010e)
+	if err != nil {
+		return false
+	}
+
+	if len(results) == 0 {
+		return false
+	}
+
+	desc, err := results[0].FormatFirst()
+	if err != nil {
+		return false
+	}
+
+	return len(desc) > 1
+}
+
+func (image *Image) getExifToolDescription() bool {
 	output, _ := exec.Command(
 		"exiftool", image.Path+image.Filename,
 	).Output()
@@ -139,7 +178,6 @@ func (image *Image) hasDescription() bool {
 			desc = lines[len(lines)-1]
 		}
 	}
-
 	return len(desc) > 1
 }
 

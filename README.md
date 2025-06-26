@@ -14,6 +14,15 @@ A script to make an LLM give description to images so they are searchable by met
   If you are running it locally:
   `export OLLAMA_HOST=http://127.0.0.1:11434`
   otherwise your ollama server IP instead of `127.0.0.1`
+- pkg-config 
+- libheif
+
+Optional:
+
+- sshfs
+  can be used if you actually want to use it on a remote machine like a synology nas
+  `mkdir ~/remote`
+  `sshfs -o rw <user>@<ip>:./ ~/remote -v`
 
 These are used as CLI dependencies so make sure they are accessible in the current env.
 
