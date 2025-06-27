@@ -134,7 +134,7 @@ func processImage(image Image, writeError func(string, ...interface{})) {
 
 	if !args.OverriteDescriptions && (found || image.hasDescription()) {
 		if !found {
-			_ = db.Set(image.GetFullPath(), "true")
+			_ = db.Set(image.GetFullPath(), "0")
 			fmt.Printf(". Skipping...Image %s already has description.\n", image.Filename)
 		} else {
 			fmt.Printf(". Skipping...Image %s found in cache.\n", image.Filename)
@@ -188,6 +188,6 @@ func processImage(image Image, writeError func(string, ...interface{})) {
 		return
 	}
 
-	_ = db.Set(image.GetFullPath(), desc)
+	_ = db.Set(image.GetFullPath(), "0")
 	c.Inc()
 }
