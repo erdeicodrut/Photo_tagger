@@ -21,6 +21,7 @@ var (
 	errFile *os.File
 	args    Args
 	db      *BadgerCache
+	c       Counter
 )
 
 func main() {
@@ -132,18 +133,20 @@ func processImage(image Image, writeError func(string, ...interface{})) {
 	_, found := db.Get(image.GetFullPath())
 
 	if !args.OverriteDescriptions && (found || image.hasDescription()) {
-		fmt.Printf("Image %s already has description. Skipping...\n", image.Filename)
 		if !found {
 			_ = db.Set(image.GetFullPath(), "true")
+			fmt.Printf(". Skipping...Image %s already has description.\n", image.Filename)
+		} else {
+			fmt.Printf(". Skipping...Image %s found in cache.\n", image.Filename)
 		}
 		return
 	}
 
 	start := time.Now()
-	fmt.Printf("Started processing %s\n", image.Filename)
+	fmt.Printf("--- Started processing %s\n", image.Filename)
 	defer func() {
 		duration := time.Since(start)
-		fmt.Printf("%s took %v ✅ \n", image.Filename, duration)
+		fmt.Printf("+ %s took %v ✅ Processed %d so far \n", image.Filename, duration, c.Value())
 	}()
 
 	err := image.ConvertToPNG()
@@ -186,4 +189,5 @@ func processImage(image Image, writeError func(string, ...interface{})) {
 	}
 
 	_ = db.Set(image.GetFullPath(), desc)
+	c.Inc()
 }

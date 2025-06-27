@@ -1,7 +1,7 @@
 temp/
+cache/
 
 # built binary
 photos_tagger 
 
 error*
-cache/
