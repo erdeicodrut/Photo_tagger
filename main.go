@@ -20,6 +20,7 @@ var (
 	m       *gollama.Gollama
 	errFile *os.File
 	args    Args
+	db      *BadgerCache
 )
 
 func main() {
@@ -32,11 +33,17 @@ func main() {
 
 	_, _ = mcli.Parse(&args)
 	errFile, _ = os.OpenFile(args.GetErrFilePath(), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
-	defer errFile.Close()
+
+	var err error
+	db, err = NewBadgerCache("./cache")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 
 	ctx = context.Background()
 	m = gollama.New(args.Model)
-	err := m.PullIfMissing(ctx)
+	err = m.PullIfMissing(ctx)
 	if err != nil {
 		fmt.Fprintf(errFile, "Error getting model, err: %s\n", err.Error())
 		return
@@ -122,8 +129,13 @@ func processImagesParallel(images []Image) {
 }
 
 func processImage(image Image, writeError func(string, ...interface{})) {
-	if !args.OverriteDescriptions && image.hasDescription() {
+	_, found := db.Get(image.GetFullPath())
+
+	if !args.OverriteDescriptions && (found || image.hasDescription()) {
 		fmt.Printf("Image %s already has description. Skipping...\n", image.Filename)
+		if !found {
+			_ = db.Set(image.GetFullPath(), "true")
+		}
 		return
 	}
 
@@ -131,7 +143,7 @@ func processImage(image Image, writeError func(string, ...interface{})) {
 	fmt.Printf("Started processing %s\n", image.Filename)
 	defer func() {
 		duration := time.Since(start)
-		fmt.Printf("%s took %v ✅ \n",  image.Filename,duration)
+		fmt.Printf("%s took %v ✅ \n", image.Filename, duration)
 	}()
 
 	err := image.ConvertToPNG()
@@ -164,7 +176,6 @@ func processImage(image Image, writeError func(string, ...interface{})) {
 
 	var item LLMAnswer
 	_ = json.Unmarshal([]byte(llmResponse.Content), &item)
-	// fmt.Println("Description:", item.Description)
 
 	resDescription := item.Description
 	desc := resDescription + "\n" + resText
@@ -173,4 +184,6 @@ func processImage(image Image, writeError func(string, ...interface{})) {
 		writeError("Error adding description: %s\n", err.Error())
 		return
 	}
+
+	_ = db.Set(image.GetFullPath(), desc)
 }

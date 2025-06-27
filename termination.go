@@ -19,4 +19,7 @@ func handleTermination() {
 
 func cleanup() {
 	os.RemoveAll("./temp")
+
+	db.Close()
+	errFile.Close()
 }
